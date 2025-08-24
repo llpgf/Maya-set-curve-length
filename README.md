@@ -36,3 +36,7 @@ This script comes with a **custom UI** to make curve length operations fast and 
    ```python
    import set_curve_length
    set_curve_length.main()
+License
+
+This project is distributed under the MIT License.
+Feel free to use, modify, and share.
