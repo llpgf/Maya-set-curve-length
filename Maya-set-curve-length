@@ -1,0 +1,259 @@
+import maya.cmds as cmds
+import maya.mel as mel
+
+def get_curve_length(curve_name):
+    """Get the length of a curve"""
+    try:
+        # Get the curve length using arclen command
+        length = cmds.arclen(curve_name)
+        return length
+    except:
+        return 0.0
+
+def set_curve_length(curve_name, target_length):
+    """Set a curve to a specific length by adjusting its shape"""
+    try:
+        # Get current length
+        current_length = get_curve_length(curve_name)
+        if current_length == 0:
+            return False
+            
+        # Calculate scale factor
+        scale_factor = target_length / current_length
+        
+        # Get the curve shape node
+        shape_nodes = cmds.listRelatives(curve_name, shapes=True, type='nurbsCurve')
+        if not shape_nodes:
+            return False
+            
+        shape_node = shape_nodes[0]
+        
+        # Get all CV positions
+        cv_count = cmds.getAttr(f"{shape_node}.spans") + cmds.getAttr(f"{shape_node}.degree")
+        cv_positions = []
+        
+        for i in range(cv_count):
+            cv_pos = cmds.pointPosition(f"{shape_node}.cv[{i}]", world=True)
+            cv_positions.append(cv_pos)
+        
+        # Keep first CV unchanged (start point)
+        first_cv_pos = cv_positions[0]
+        
+        # Scale CVs from the first CV position
+        for i in range(cv_count):
+            if i == 0:
+                # Keep first CV in its original position
+                continue
+            else:
+                cv_pos = cv_positions[i]
+                # Calculate offset from first CV
+                offset_x = cv_pos[0] - first_cv_pos[0]
+                offset_y = cv_pos[1] - first_cv_pos[1]
+                offset_z = cv_pos[2] - first_cv_pos[2]
+                
+                # Scale the offset and add back to first CV position
+                new_x = first_cv_pos[0] + (offset_x * scale_factor)
+                new_y = first_cv_pos[1] + (offset_y * scale_factor)
+                new_z = first_cv_pos[2] + (offset_z * scale_factor)
+                
+                cmds.move(new_x, new_y, new_z, f"{shape_node}.cv[{i}]", worldSpace=True)
+            
+        return True
+    except:
+        return False
+
+def set_curves_to_same_length(mode):
+    """Set selected curves to the same length based on mode"""
+    # Get selected curves
+    selection = cmds.ls(selection=True, type='transform')
+    curves = []
+    
+    for obj in selection:
+        # Check if it has a nurbsCurve shape
+        shapes = cmds.listRelatives(obj, shapes=True, type='nurbsCurve')
+        if shapes:
+            curves.append(obj)
+    
+    if len(curves) < 2:
+        cmds.warning("Please select at least 2 curves.")
+        return
+    
+    # Get lengths of all curves
+    curve_lengths = []
+    for curve in curves:
+        length = get_curve_length(curve)
+        curve_lengths.append((curve, length))
+    
+    # Determine target length based on mode
+    if mode == "shortest":
+        target_length = min(length for _, length in curve_lengths)
+        mode_name = "shortest"
+    elif mode == "longest":
+        target_length = max(length for _, length in curve_lengths)
+        mode_name = "longest"
+    elif mode == "average":
+        total_length = sum(length for _, length in curve_lengths)
+        target_length = total_length / len(curve_lengths)
+        mode_name = "average"
+    else:
+        cmds.warning("Invalid mode specified.")
+        return
+    
+    # Set all curves to target length
+    success_count = 0
+    for curve, _ in curve_lengths:
+        if set_curve_length(curve, target_length):
+            success_count += 1
+    
+    cmds.confirmDialog(title="Success", 
+                      message=f"Set {success_count} curves to {mode_name} length: {target_length:.3f}",
+                      button="OK")
+
+def adjust_curve_length(adjustment_value):
+    """Adjust the length of selected curves by adding/subtracting a value"""
+    # Get selected curves
+    selection = cmds.ls(selection=True, type='transform')
+    curves = []
+    
+    for obj in selection:
+        # Check if it has a nurbsCurve shape
+        shapes = cmds.listRelatives(obj, shapes=True, type='nurbsCurve')
+        if shapes:
+            curves.append(obj)
+    
+    if len(curves) < 1:
+        cmds.warning("Please select at least 1 curve.")
+        return
+    
+    # Adjust each curve's length
+    success_count = 0
+    for curve in curves:
+        current_length = get_curve_length(curve)
+        if current_length > 0:
+            new_length = current_length + adjustment_value
+            if new_length > 0:  # Ensure length stays positive
+                if set_curve_length(curve, new_length):
+                    success_count += 1
+    
+    operation = "added" if adjustment_value > 0 else "subtracted"
+    abs_value = abs(adjustment_value)
+    cmds.confirmDialog(title="Success", 
+                      message=f"Adjusted {success_count} curves: {operation} {abs_value:.3f} to length",
+                      button="OK")
+
+def get_selected_curves_info():
+    """Get information about selected curves for display in UI"""
+    selection = cmds.ls(selection=True, type='transform')
+    curves = []
+    
+    for obj in selection:
+        shapes = cmds.listRelatives(obj, shapes=True, type='nurbsCurve')
+        if shapes:
+            curves.append(obj)
+    
+    if not curves:
+        return "No curves selected"
+    
+    if len(curves) == 1:
+        length = get_curve_length(curves[0])
+        return f"Selected: {curves[0]}\nLength: {length:.3f}"
+    else:
+        lengths = [get_curve_length(curve) for curve in curves]
+        avg_length = sum(lengths) / len(lengths)
+        min_length = min(lengths)
+        max_length = max(lengths)
+        return f"Selected: {len(curves)} curves\nAvg Length: {avg_length:.3f}\nMin: {min_length:.3f}\nMax: {max_length:.3f}"
+
+def create_ui():
+    """Create the UI window"""
+    window_name = "setCurveLengthWindow"
+    
+    # Delete existing window if it exists
+    if cmds.window(window_name, exists=True):
+        cmds.deleteUI(window_name)
+    
+    # Create window
+    window = cmds.window(window_name, title="Set Curve Length", widthHeight=(350, 350))
+    
+    cmds.columnLayout(adjustableColumn=True, rowSpacing=10, columnOffset=["both", 10])
+    
+    # Title
+    cmds.text(label="Curve Length Tools", font="boldLabelFont")
+    cmds.separator(height=10)
+    
+    # Curve Info Section
+    cmds.text(label="Selected Curves Info:", font="boldLabelFont")
+    curve_info_text = cmds.text(label="No curves selected", wordWrap=True, width=330)
+    cmds.separator(height=5)
+    
+    # Refresh button for curve info
+    cmds.button(label="Refresh Selection Info", 
+                command=lambda x: cmds.text(curve_info_text, edit=True, label=get_selected_curves_info()),
+                height=25)
+    
+    cmds.separator(height=10)
+    
+    # Set to Same Length Section
+    cmds.text(label="Set Curves to Same Length:", font="boldLabelFont")
+    cmds.separator(height=5)
+    
+    # Buttons for same length
+    cmds.button(label="Set to Shortest Length", 
+                command=lambda x: set_curves_to_same_length("shortest"),
+                height=30)
+    
+    cmds.button(label="Set to Longest Length", 
+                command=lambda x: set_curves_to_same_length("longest"),
+                height=30)
+    
+    cmds.button(label="Set to Average Length", 
+                command=lambda x: set_curves_to_same_length("average"),
+                height=30)
+    
+    cmds.separator(height=10)
+    
+    # Adjust Length Section
+    cmds.text(label="Adjust Curve Length:", font="boldLabelFont")
+    cmds.separator(height=5)
+    
+    # Input field for length adjustment
+    cmds.rowLayout(numberOfColumns=3, adjustableColumn=2)
+    cmds.text(label="Adjust by:")
+    length_adjust_field = cmds.floatField(value=1.0, precision=3, width=100)
+    cmds.text(label="units")
+    cmds.setParent('..')
+    
+    cmds.separator(height=5)
+    
+    # Buttons for length adjustment
+    cmds.rowLayout(numberOfColumns=2, adjustableColumn=1)
+    cmds.button(label="Increase Length", 
+                command=lambda x: adjust_curve_length(cmds.floatField(length_adjust_field, query=True, value=True)),
+                height=30)
+    cmds.button(label="Decrease Length", 
+                command=lambda x: adjust_curve_length(-cmds.floatField(length_adjust_field, query=True, value=True)),
+                height=30)
+    cmds.setParent('..')
+    
+    cmds.separator(height=10)
+    
+    # Close button
+    cmds.button(label="Close", 
+                command=f"cmds.deleteUI('{window_name}')",
+                height=25)
+    
+    # Initialize curve info
+    cmds.text(curve_info_text, edit=True, label=get_selected_curves_info())
+    
+    cmds.showWindow(window)
+
+def main():
+    """Main function to be called from shelf"""
+    try:
+        create_ui()
+    except Exception as e:
+        cmds.warning(f"Error creating UI: {str(e)}")
+
+# Create and show the UI
+if __name__ == "__main__":
+    main()
